@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-const API_URL = "http://localhost:8000";
+const API_URL = "https://credit-card-fraud-model.onrender.com";
 
 const FEATURES = [
   { key: "V14",           label: "Authentication Pattern",      help: "Lower = unusual auth patterns",       min: -20, max: 10,    step: 0.01, default: 0,  isAmount: false },
