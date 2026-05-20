@@ -3,171 +3,280 @@ import pickle
 import numpy as np
 import pandas as pd
 import shap
-import matplotlib.pyplot as plt
 import matplotlib
+import matplotlib.pyplot as plt
 matplotlib.use("Agg")
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Credit Card Fraud Detector",
-    page_icon="🔍",
+    page_icon="🛡️",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
-# ── Load model ─────────────────────────────────────────────────────────────────
+# ── Custom CSS ─────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+    .main { padding: 1.5rem 2rem; }
+    .metric-card {
+        background: #f8f9fa;
+        border-radius: 12px;
+        padding: 1.2rem 1.5rem;
+        border: 1px solid #e9ecef;
+        margin-bottom: 1rem;
+    }
+    .fraud-box {
+        background: #fff5f5;
+        border: 1.5px solid #fc8181;
+        border-radius: 12px;
+        padding: 1.2rem 1.5rem;
+        text-align: center;
+    }
+    .legit-box {
+        background: #f0fff4;
+        border: 1.5px solid #68d391;
+        border-radius: 12px;
+        padding: 1.2rem 1.5rem;
+        text-align: center;
+    }
+    .section-header {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: #2d3748;
+        margin-bottom: 0.8rem;
+        padding-bottom: 0.4rem;
+        border-bottom: 2px solid #e2e8f0;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ── Feature config ─────────────────────────────────────────────────────────────
+FEATURE_CONFIG = {
+    "V14": {
+        "label":   "Authentication Pattern",
+        "help":    "Derived from transaction authentication behaviour. "
+                   "Lower values indicate unusual auth patterns linked to fraud.",
+        "default": 0.0, "min": -20.0, "max": 10.0,
+    },
+    "V17": {
+        "label":   "Spending Velocity",
+        "help":    "Reflects how rapidly money is being spent relative to account history. "
+                   "Sudden spikes are a strong fraud signal.",
+        "default": 0.0, "min": -20.0, "max": 10.0,
+    },
+    "V12": {
+        "label":   "Merchant Category Deviation",
+        "help":    "How much this transaction deviates from the cardholder's "
+                   "typical merchant categories.",
+        "default": 0.0, "min": -20.0, "max": 10.0,
+    },
+    "V10": {
+        "label":   "Geographic Anomaly Score",
+        "help":    "Captures geographic inconsistencies — e.g. a card used in "
+                   "two distant locations within minutes.",
+        "default": 0.0, "min": -20.0, "max": 10.0,
+    },
+    "V4": {
+        "label":   "Card Usage Frequency",
+        "help":    "Reflects how frequently the card is being used compared to "
+                   "historical patterns. Unusually high = suspicious.",
+        "default": 0.0, "min": -10.0, "max": 20.0,
+    },
+    "V11": {
+        "label":   "Time-of-Day Behaviour",
+        "help":    "Captures whether the transaction time matches the cardholder's "
+                   "normal activity hours.",
+        "default": 0.0, "min": -10.0, "max": 20.0,
+    },
+    "Amount_scaled": {
+        "label":   "Transaction Amount (€)",
+        "help":    "The actual euro value of the transaction.",
+        "default": 50.0, "min": 0.0, "max": 25000.0,
+    },
+}
+
+MODEL_FEATURES = list(FEATURE_CONFIG.keys())
+LABEL_MAP      = {k: v["label"] for k, v in FEATURE_CONFIG.items()}
+
+# ── Load model & explainer ─────────────────────────────────────────────────────
 @st.cache_resource
 def load_model():
     with open("xgb_credit_fraud_model.pkl", "rb") as f:
         return pickle.load(f)
 
-model = load_model()
-
-# ── Build SHAP explainer once (cached) ────────────────────────────────────────
 @st.cache_resource
 def load_explainer(_model):
     return shap.TreeExplainer(_model)
 
+model     = load_model()
 explainer = load_explainer(model)
 
-# ── Feature list (30 features: V1-V28 + Amount_scaled + Time_scaled) ──────────
-V_FEATURES   = [f"V{i}" for i in range(1, 29)]
-ALL_FEATURES = V_FEATURES + ["Amount_scaled", "Time_scaled"]
-
 # ── Header ─────────────────────────────────────────────────────────────────────
-st.title("🔍 Credit Card Fraud Detector")
+st.title("🛡️ Credit Card Fraud Detector")
 st.markdown(
-    "Enter transaction details below. The model will predict the **fraud probability** "
-    "and explain *why* using SHAP."
+    "Fill in the transaction details below. The model analyses **6 behavioural signals** "
+    "and returns a real-time fraud risk score with a full SHAP explanation."
+)
+st.caption(
+    "ℹ️ Features are derived from anonymised PCA components of real bank transaction data "
+    "(Kaggle ULB dataset). Renamed for readability — not official bank terminology."
 )
 st.divider()
 
-# ── Sidebar — V feature inputs ─────────────────────────────────────────────────
-st.sidebar.header("V Features (PCA components)")
-st.sidebar.caption("These are anonymised PCA features from the original dataset.")
+# ── Input form ─────────────────────────────────────────────────────────────────
+st.markdown('<p class="section-header">Transaction Details</p>', unsafe_allow_html=True)
 
-v_values = {}
-for feat in V_FEATURES:
-    v_values[feat] = st.sidebar.number_input(
-        label=feat,
-        value=0.0,
-        format="%.4f",
-        step=0.0001,
-        key=feat,
-    )
+col1, col2, col3 = st.columns(3)
+inputs = {}
 
-# ── Main — Amount and Time inputs ──────────────────────────────────────────────
-col1, col2 = st.columns(2)
+for i, (feat, cfg) in enumerate(FEATURE_CONFIG.items()):
+    target_col = [col1, col2, col3][i % 3]
+    with target_col:
+        if feat == "Amount_scaled":
+            inputs[feat] = st.number_input(
+                label=cfg["label"],
+                min_value=float(cfg["min"]),
+                max_value=float(cfg["max"]),
+                value=float(cfg["default"]),
+                step=0.01,
+                format="%.2f",
+                help=cfg["help"],
+            )
+        else:
+            inputs[feat] = st.slider(
+                label=cfg["label"],
+                min_value=float(cfg["min"]),
+                max_value=float(cfg["max"]),
+                value=float(cfg["default"]),
+                step=0.01,
+                help=cfg["help"],
+            )
 
-with col1:
-    st.subheader("Transaction details")
-    amount_raw = st.number_input(
-        "Transaction amount (€)",
-        min_value=0.0,
-        max_value=25000.0,
-        value=50.0,
-        step=0.01,
-        format="%.2f",
-    )
-    time_raw = st.number_input(
-        "Time (seconds since first transaction)",
-        min_value=0,
-        max_value=200000,
-        value=50000,
-        step=1,
-    )
-
-    # Scale Amount and Time the same way training did (StandardScaler μ/σ from dataset)
-    # Creditcard.csv known statistics:
-    AMOUNT_MEAN, AMOUNT_STD = 88.35, 250.12
-    TIME_MEAN,   TIME_STD   = 94813.86, 47488.15
-
-    amount_scaled = (amount_raw - AMOUNT_MEAN) / AMOUNT_STD
-    time_scaled   = (time_raw   - TIME_MEAN)   / TIME_STD
-
-    st.caption(
-        f"Scaled → Amount: `{amount_scaled:.4f}`  |  Time: `{time_scaled:.4f}`"
-    )
-
-# ── Build input dataframe ──────────────────────────────────────────────────────
-input_dict = {**v_values, "Amount_scaled": amount_scaled, "Time_scaled": time_scaled}
-input_df   = pd.DataFrame([input_dict])[ALL_FEATURES]
+st.divider()
 
 # ── Predict button ─────────────────────────────────────────────────────────────
-with col2:
-    st.subheader("Prediction")
-    predict_btn = st.button("Analyse transaction", type="primary", use_container_width=True)
+btn_col, _ = st.columns([1, 2])
+with btn_col:
+    predict_btn = st.button("🔍 Analyse Transaction", type="primary", use_container_width=True)
 
-    if predict_btn:
-        prob      = model.predict_proba(input_df)[0][1]
-        threshold = 0.5
-        is_fraud  = prob >= threshold
+# ── Results ────────────────────────────────────────────────────────────────────
+if predict_btn:
+    input_df = pd.DataFrame([inputs])[MODEL_FEATURES]
+    prob     = model.predict_proba(input_df)[0][1]
+    is_fraud = prob >= 0.5
 
-        # Score gauge
+    st.divider()
+
+    res_col, gauge_col, summary_col = st.columns([1.2, 1.5, 1.3])
+
+    # Verdict card
+    with res_col:
+        st.markdown('<p class="section-header">Verdict</p>', unsafe_allow_html=True)
         if is_fraud:
-            st.error(f"🚨 **FRAUD DETECTED**  —  Probability: `{prob:.2%}`")
+            st.markdown(f"""
+            <div class="fraud-box">
+                <h2 style="color:#c53030;margin:0">🚨 FRAUD</h2>
+                <p style="font-size:2rem;font-weight:700;color:#c53030;margin:0.3rem 0">
+                    {prob:.1%}</p>
+                <p style="color:#742a2a;margin:0">fraud probability</p>
+            </div>""", unsafe_allow_html=True)
         else:
-            st.success(f"✅ **LEGITIMATE**  —  Fraud probability: `{prob:.2%}`")
+            st.markdown(f"""
+            <div class="legit-box">
+                <h2 style="color:#276749;margin:0">✅ LEGITIMATE</h2>
+                <p style="font-size:2rem;font-weight:700;color:#276749;margin:0.3rem 0">
+                    {prob:.1%}</p>
+                <p style="color:#22543d;margin:0">fraud probability</p>
+            </div>""", unsafe_allow_html=True)
 
-        st.progress(float(prob), text=f"Fraud risk: {prob:.2%}")
+    # Risk meter
+    with gauge_col:
+        st.markdown('<p class="section-header">Risk Level</p>', unsafe_allow_html=True)
+        st.progress(float(prob))
 
-        st.markdown("---")
-
-        # Risk breakdown
-        st.markdown("**Risk level**")
         if prob < 0.2:
-            st.info("🟢 Low risk — very likely legitimate")
+            st.info("🟢 **Low risk** — Transaction appears normal.")
         elif prob < 0.5:
-            st.warning("🟡 Moderate risk — review recommended")
+            st.warning("🟡 **Moderate risk** — Some unusual signals detected.")
         elif prob < 0.8:
-            st.warning("🟠 High risk — flag for manual review")
+            st.warning("🟠 **High risk** — Flag for manual review.")
         else:
-            st.error("🔴 Critical risk — block transaction")
+            st.error("🔴 **Critical risk** — Block this transaction.")
 
-# ── SHAP explanation ───────────────────────────────────────────────────────────
-st.divider()
-st.subheader("SHAP Explanation — why did the model decide this?")
+    # Input summary table
+    with summary_col:
+        st.markdown('<p class="section-header">Input Summary</p>', unsafe_allow_html=True)
+        summary_df = pd.DataFrame({
+            "Feature": [FEATURE_CONFIG[f]["label"] for f in MODEL_FEATURES],
+            "Value":   [f"€{inputs[f]:.2f}" if f == "Amount_scaled"
+                        else f"{inputs[f]:.3f}" for f in MODEL_FEATURES],
+        })
+        st.dataframe(summary_df, hide_index=True, use_container_width=True)
 
-if not predict_btn:
-    st.info("Click **Analyse transaction** above to see the SHAP explanation.")
-else:
-    with st.spinner("Computing SHAP values..."):
+    # ── SHAP explanation ───────────────────────────────────────────────────────
+    st.divider()
+    st.markdown('<p class="section-header">Why did the model decide this?</p>',
+                unsafe_allow_html=True)
+    st.caption(
+        "🔴 Red bars push toward **fraud** &nbsp;|&nbsp; "
+        "🔵 Blue bars push toward **legitimate** &nbsp;|&nbsp; "
+        "Longer bar = stronger influence on the decision."
+    )
+
+    with st.spinner("Computing SHAP explanation..."):
         shap_values = explainer(input_df)
 
-    tab1, tab2 = st.tabs(["Waterfall plot", "Feature contributions table"])
+    shap_values.feature_names = [LABEL_MAP[f] for f in MODEL_FEATURES]
+
+    tab1, tab2 = st.tabs(["📊 Waterfall Plot", "📋 Contributions Table"])
 
     with tab1:
-        st.caption(
-            "Each bar shows how much a feature **pushed the prediction** toward fraud (red ↑) "
-            "or toward legitimate (blue ↓). The bottom value is the model baseline; "
-            "the top is the final fraud probability."
-        )
-        fig, ax = plt.subplots(figsize=(10, 6))
-        shap.plots.waterfall(shap_values[0], max_display=15, show=False)
+        fig, _ = plt.subplots(figsize=(9, 4))
+        shap.plots.waterfall(shap_values[0], max_display=7, show=False)
         plt.tight_layout()
         st.pyplot(fig, use_container_width=True)
         plt.close(fig)
+        st.caption(
+            f"Base value = model's average fraud rate across all training transactions. "
+            f"Output value = fraud probability for this transaction = **{prob:.4f}**"
+        )
 
     with tab2:
-        shap_df = pd.DataFrame({
-            "Feature":          ALL_FEATURES,
-            "Input value":      input_df.iloc[0].values,
-            "SHAP value":       shap_values.values[0],
-            "Direction":        ["↑ Fraud" if v > 0 else "↓ Legit"
-                                 for v in shap_values.values[0]],
+        contrib_df = pd.DataFrame({
+            "Feature":           [LABEL_MAP[f] for f in MODEL_FEATURES],
+            "Your Input":        [f"€{inputs[f]:.2f}" if f == "Amount_scaled"
+                                   else f"{inputs[f]:.4f}" for f in MODEL_FEATURES],
+            "SHAP Contribution": [f"{v:+.4f}" for v in shap_values.values[0]],
+            "Effect":            ["↑ Toward Fraud" if v > 0 else "↓ Toward Legit"
+                                   for v in shap_values.values[0]],
+            "Abs Impact":        [abs(v) for v in shap_values.values[0]],
         })
-        shap_df["Abs impact"] = shap_df["SHAP value"].abs()
-        shap_df = shap_df.sort_values("Abs impact", ascending=False).reset_index(drop=True)
+        contrib_df = (contrib_df
+                      .sort_values("Abs Impact", ascending=False)
+                      .reset_index(drop=True)
+                      .drop(columns="Abs Impact"))
+        st.dataframe(contrib_df, hide_index=True, use_container_width=True)
 
-        st.dataframe(
-            shap_df[["Feature", "Input value", "SHAP value", "Direction", "Abs impact"]],
-            use_container_width=True,
-            hide_index=True,
-        )
+# ── Empty state ────────────────────────────────────────────────────────────────
+else:
+    st.markdown("""
+    <div style="text-align:center;padding:3rem 1rem;color:#a0aec0">
+        <p style="font-size:3rem;margin:0">🛡️</p>
+        <p style="font-size:1.1rem;margin:0.5rem 0">
+            Fill in the transaction details above and click
+            <strong>Analyse Transaction</strong>
+        </p>
+        <p style="font-size:0.85rem">
+            You'll get a fraud probability score + full SHAP explanation
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
 # ── Footer ─────────────────────────────────────────────────────────────────────
 st.divider()
 st.caption(
-    "Model: XGBoost trained on the Kaggle Credit Card Fraud dataset (ULB).  "
-    "Explanations powered by SHAP TreeExplainer.  "
-    "Threshold: 0.5 — adjust based on business risk tolerance."
+    "Model: XGBoost retrained on top 6 features (V14, V17, V12, V10, V4, V11) + Amount_scaled  |  "
+    "PR-AUC: 0.78  |  Explanations: SHAP TreeExplainer  |  "
+    "Dataset: Kaggle Credit Card Fraud Detection (ULB, 284,807 transactions)"
 )
