@@ -20,7 +20,7 @@ app = FastAPI(
 # ── CORS (allow your React dev server) ────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],  # add prod URL here
+    allow_origins=["https://credit-card-fraud-model.vercel.app/", "http://localhost:5173"],  # add prod URL here
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
